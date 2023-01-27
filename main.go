@@ -6,12 +6,18 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
+	"sync"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 var (
 	instruments []instrument
+	margin      = lipgloss.NewStyle().Margin(1, 2, 0, 2)
 )
 
 type instrument struct {
@@ -23,11 +29,44 @@ type instrumentsResponse struct {
 	Result []instrument `json:"result"`
 }
 
+type ticker struct {
+	MarkPrice  float64 `json:"mark_price"`
+	IndexPrice float64 `json:"index_price"`
+}
+
 type tickerResponse struct {
-	Result struct {
-		MarkPrice  float64 `json:"mark_price"`
-		IndexPrice float64 `json:"index_price"`
-	} `json:"result"`
+	Result ticker `json:"result"`
+}
+
+type tickerMsg struct {
+	i instrument
+	t ticker
+}
+
+type model struct {
+	tickers map[instrument]ticker
+	m       sync.Mutex
+}
+
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC:
+			return m, tea.Quit
+		}
+	case tickerMsg:
+		tm := tickerMsg(msg)
+		m.m.Lock()
+		m.tickers[tm.i] = tm.t
+		m.m.Unlock()
+	}
+
+	return m, nil
 }
 
 func getJSON(path string, params url.Values, response interface{}) error {
@@ -81,32 +120,65 @@ func tenor(ms int64) string {
 	return fmt.Sprintf("%3dd %2dh %2dm", days, hours, minutes)
 }
 
-func getYields() {
+func getTicker(i instrument) ticker {
+	var response tickerResponse
+	err := getJSON(
+		"/api/v2/public/ticker",
+		url.Values{"instrument_name": {i.InstrumentName}},
+		&response)
+	if err != nil {
+		return ticker{}
+	}
+
+	return response.Result
+}
+
+func (m model) View() string {
+	var output string
+
 	for _, i := range instruments {
-		var response tickerResponse
-		err := getJSON(
-			"/api/v2/public/ticker",
-			url.Values{"instrument_name": {i.InstrumentName}},
-			&response)
-		if err != nil {
-			return
-		}
+		m.m.Lock()
+		t := m.tickers[i]
+		m.m.Unlock()
 
 		msToExpiration := i.ExpirationTimestamp - time.Now().UnixMilli()
 
-		premium := response.Result.MarkPrice - response.Result.IndexPrice
-		yield := premium / response.Result.IndexPrice
-		annualisedYield := yield / (float64(msToExpiration) / (1000 * 60 * 60 * 24 * 365))
+		var premium, yield, annualisedYield float64
+
+		if (t != ticker{}) {
+			premium = t.MarkPrice - t.IndexPrice
+			yield = premium / t.IndexPrice
+			annualisedYield = yield / (float64(msToExpiration) / (1000 * 60 * 60 * 24 * 365))
+		}
 
 		if i.InstrumentName == "BTC-PERPETUAL" {
-			fmt.Printf("%-13s %7.2f\n", i.InstrumentName, premium)
+			output += fmt.Sprintf("%-13s %7.2f\n", i.InstrumentName, premium)
 		} else {
-			fmt.Printf("%-13s %7.2f %5.2f%% %s\n", i.InstrumentName, premium, annualisedYield*100, tenor(msToExpiration))
+			output += fmt.Sprintf("%-13s %7.2f %5.2f%% %s\n", i.InstrumentName, premium, annualisedYield*100, tenor(msToExpiration))
 		}
 	}
+
+	return margin.Render(output)
 }
 
 func main() {
+	m := model{tickers: map[instrument]ticker{}}
+	p := tea.NewProgram(m, tea.WithAltScreen())
+
 	instruments = getInstruments()
-	getYields()
+	for _, i := range instruments {
+		go func(in instrument) {
+			t := time.NewTicker(1 * time.Second)
+
+			for {
+				p.Send(tickerMsg{i: in, t: getTicker(in)})
+				<-t.C
+			}
+		}(i)
+	}
+
+	if err := p.Start(); err != nil {
+		fmt.Printf("Error: %v", err)
+		os.Exit(1)
+	}
 }
