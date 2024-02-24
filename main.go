@@ -163,7 +163,7 @@ func (m model) View() string {
 
 func main() {
 	m := model{tickers: map[instrument]ticker{}}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithFPS(10))
 
 	instruments = getInstruments()
 	for _, i := range instruments {
