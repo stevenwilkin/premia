@@ -152,9 +152,9 @@ func (m model) View() string {
 		}
 
 		if i.InstrumentName == "BTC-PERPETUAL" {
-			output += fmt.Sprintf("%-13s %7.2f\n", i.InstrumentName, premium)
+			output += fmt.Sprintf("%-13s %8.2f\n", i.InstrumentName, premium)
 		} else {
-			output += fmt.Sprintf("%-13s %7.2f %5.2f%% %s\n", i.InstrumentName, premium, annualisedYield*100, tenor(msToExpiration))
+			output += fmt.Sprintf("%-13s %8.2f %5.2f%% %s\n", i.InstrumentName, premium, annualisedYield*100, tenor(msToExpiration))
 		}
 	}
 
